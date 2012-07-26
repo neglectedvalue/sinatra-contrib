@@ -115,14 +115,19 @@ module Sinatra
   #
   module Namespace
     def self.new(base, pattern, conditions = {}, &block)
-      Module.new do
+      Class.new(base) do
         extend NamespacedMethods
         include InstanceMethods
-        @base, @extensions    = base, []
+        @extensions = []
         @pattern, @conditions = compile(pattern, conditions)
         @templates            = Hash.new { |h,k| @base.templates[k] }
+        class << self
+          attr_accessor :extensions, :templates
+          attr_accessor :pattern, :conditions
+        end
         namespace = self
-        before { extend(@namespace = namespace) }
+        # before { extend(@namespace = namespace) }
+        before { @namespace = namespace }
         class_eval(&block)
       end
     end
@@ -154,7 +159,6 @@ module Sinatra
     module NamespacedMethods
       include SharedMethods
       include Sinatra::Decompile
-      attr_reader :base, :templates
 
       def self.prefixed(*names)
         names.each { |n| define_method(n) { |*a, &b| prefixed(n, *a, &b) }}
@@ -193,8 +197,8 @@ module Sinatra
       end
 
       def respond_to(*args)
-        return @conditions[:provides] || base.respond_to if args.empty?
-        @conditions[:provides] = args
+        return self.conditions[:provides] || super if args.empty?
+        self.conditions[:provides] = args
       end
 
       def set(key, value = self, &block)
@@ -224,7 +228,7 @@ module Sinatra
       private
 
       def app
-        base.respond_to?(:base) ? base.base : base
+        self
       end
 
       def compile(pattern, conditions, default_pattern = nil)
@@ -232,10 +236,10 @@ module Sinatra
           conditions = conditions.merge pattern.to_hash
           pattern = nil
         end
-        base_pattern, base_conditions = @pattern, @conditions
+        base_pattern, base_conditions = pattern, conditions
         pattern         ||= default_pattern
-        base_pattern    ||= base.pattern    if base.respond_to? :pattern
-        base_conditions ||= base.conditions if base.respond_to? :conditions
+        base_pattern    ||= superclass.pattern    if superclass.respond_to? :pattern
+        base_conditions ||= superclass.conditions if superclass.respond_to? :conditions
         [ prefixed_path(base_pattern, pattern),
           (base_conditions || {}).merge(conditions) ]
       end
@@ -245,7 +249,7 @@ module Sinatra
         a, b = decompile(a), decompile(b) unless a.class == b.class
         a, b = regexpify(a), regexpify(b) unless a.class == b.class
         path = a.class.new "#{a}#{b}"
-        path = /^#{path}$/ if path.is_a? Regexp and base == app
+        path = /^#{path}$/ if path.is_a? Regexp
         path
       end
 
@@ -257,14 +261,14 @@ module Sinatra
 
       def prefixed(method, pattern = nil, conditions = {}, &block)
         default = '*' if method == :before or method == :after
-        pattern, conditions = compile pattern, conditions, default
-        result = base.send(method, pattern, conditions, &block)
+        pattern, conditions = compile(pattern, conditions, default)
+        result = superclass.send(method, pattern, conditions, &block)
         invoke_hook :route_added, method.to_s.upcase, pattern, block
         result
       end
 
       def method_missing(meth, *args, &block)
-        base.send(meth, *args, &block)
+        superclass.send(meth, *args, &block)
       end
     end
 
